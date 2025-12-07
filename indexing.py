@@ -1,12 +1,12 @@
 import getpass
 import os
 from dotenv import load_dotenv
-import bs4
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pymongo import MongoClient
+import bs4
 
 # from vector_store import vector_store
 # from indexing import vector_store
@@ -35,7 +35,7 @@ bs4_strainer = bs4.SoupStrainer(class_=("post-title", "post-header", "post-conte
 
 #mongodb atlas connection
 client = MongoClient(MONGODB_URI)
-MONGODB_COLLECTION = client["rag_db"]["lilianweng_agents"]   # db_name.collection_name – change if you want
+MONGODB_COLLECTION = client["rag_db"]["rag_docs"]   # db_name.collection_name – change if you want
 
 #vector store using mongodb
 vector_store = MongoDBAtlasVectorSearch(    
@@ -43,64 +43,54 @@ vector_store = MongoDBAtlasVectorSearch(
     collection=MONGODB_COLLECTION,
     index_name=ATLAS_VECTOR_SEARCH_INDEX_NAME,
     relevance_score_fn="cosine",
+    create_index =True,
 )
 
 #loader from html to text
 loader = WebBaseLoader(
-    web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
-    bs_kwargs={"parse_only": bs4_strainer},
+    # web_paths=("https://lilianweng.github.io/posts/2023-06-23-agent/",),
+    web_paths=("https://docs.langchain.com/oss/python/langchain/rag/",),
+    # bs_kwargs={"parse_only": bs4_strainer},
 )
 docs = loader.load()
 
 assert len(docs) == 1
+print(f"Total characters: {len(docs[0].page_content)}")
+
+"""
+# Load and clean HTML from webpage
+url = "https://docs.langchain.com/oss/python/langchain/rag/"
+response = requests.get(url)
+soup = BeautifulSoup(response.text, "html.parser")
+
+# Extract main content only
+# Adjust the selector if the page uses different structure
+main_content = soup.find("main")  # most docs wrap main content in <main>
+if not main_content:
+    main_content = soup  # fallback to full page if <main> not found
+
+text = main_content.get_text(separator="\n", strip=True)
+print(f"Total characters extracted: {len(text)}")
+
+# Wrap cleaned text as a LangChain document
+from langchain.schema import Document
+docs = [Document(page_content=text, metadata={"source": url})]
+
+"""
 
 #splitter into equal chunks
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,  # chunk size (characters)
-    chunk_overlap=200,  # chunk overlap (characters)
+    chunk_size=500,  # chunk size (characters)
+    chunk_overlap=100,  # chunk overlap (characters)
     add_start_index=True,  # track index in original document
 )
 all_splits = text_splitter.split_documents(docs)
-
+print(f"Split into {len(all_splits)} chunks")
 
 #storing documents
 document_ids = vector_store.add_documents(documents=all_splits)
+print(f"Indexed {len(document_ids)} documents")
 
-
-@tool(response_format="content_and_artifact")
-def retrieve_context(query: str):
-    """Retrieve information to help answer a query."""
-    retrieved_docs = vector_store.similarity_search(query, k=5)
-    serialized = "\n\n".join(
-        (f"Source: {doc.metadata}\nContent: {doc.page_content}")
-        for doc in retrieved_docs
-    )
-    return serialized, retrieved_docs
-
-
-tools = [retrieve_context]
-# If desired, specify custom instructions
-prompt = (
-    "You have access to a tool that retrieves context from a blog post. "
-    "Use the tool to help answer user queries."
-)
-agent = create_agent(
-    model= model,
-    tools= tools,
-    system_prompt=prompt)
-
-
-query = (
-    "llm powered autonomous agents"
-)
-       
-for event in agent.stream(
-    {"messages": [{"role": "user", "content": query}]},
-    stream_mode="values",
-):
-    event["messages"][-1].pretty_print()
-
-# print(document_ids[:3])
 
 # print(f"Split blog post into {len(all_splits)} sub-documents.")
 # print(f"Total characters: {len(docs[0].page_content)}")
